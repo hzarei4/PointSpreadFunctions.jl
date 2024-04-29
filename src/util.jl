@@ -613,5 +613,9 @@ function calc_with_resampling(fct, sz, sampling; norm_amp=true, dims=1:3)
         end        
     end
     # select the appropriate wanted size
+    @show size(res_small)
+    @show size(res)
+    @show sz
+    @show scale
     return select_region_view(res, new_size=sz) .* scale
 end
