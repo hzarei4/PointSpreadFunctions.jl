@@ -8,22 +8,26 @@ csz = (32,32,32)
 sampling=(0.100,0.100,0.150)
 
 function ctr_test(dat1, dat2, rtol=0.01)
-    isapprox(select_region(dat1,new_size=csz), select_region(dat2,new_size=csz), rtol=rtol)
+    isapprox(select_region(dat1, new_size=csz), select_region(dat2, new_size=csz), rtol=rtol)
 end
 
-function compare_asfs(sz, pp, sampling)
+function compare_asfs(sz, pp, sampling; noRW=false)
     @time a_prop = apsf(PointSpreadFunctions.MethodPropagate, sz, pp, sampling=sampling);
     @time a_sincR = apsf(PointSpreadFunctions.MethodSincR, sz ,pp, sampling=sampling);
     @time a_shell = apsf(PointSpreadFunctions.MethodShell, sz, pp, sampling=sampling);  # fast
     @time a_iter = apsf(PointSpreadFunctions.MethodPropagateIterative, sz ,pp, sampling=sampling);
-    @time a_RW = apsf(PointSpreadFunctions.MethodRichardsWolf, sz, pp, sampling=sampling);
+    @time a_czt = apsf(PointSpreadFunctions.MethodCZT, sz ,pp, sampling=sampling);
+
     sz_big = (512,512,128)
     @time a_prop2 = NDTools.select_region(apsf(PointSpreadFunctions.MethodPropagate, sz_big,pp, sampling=sampling), new_size=sz);
     @test ctr_test(a_prop, a_iter, 0.05)
     @test ctr_test(a_iter, a_sincR, 0.15)
     @test ctr_test(a_iter, a_shell, 0.1)
     @test ctr_test(a_iter, a_prop2, 0.1)
+    if (noRW) return end
+    @time a_RW = apsf(PointSpreadFunctions.MethodRichardsWolf, sz, pp, sampling=sampling);
     @test ctr_test(a_iter, a_RW, 0.1)
+    @test ctr_test(a_czt, a_RW, 0.1)   
     # @vt a_prop2 a_iter a_sincR  a_prop a_shell a_RW
     # mz = size(a_prop2,3)÷2+1; @vt ft2d(a_prop2[:,:,mz:mz,:]) ft2d(a_iter[:,:,mz:mz,:]) ft2d(a_sincR[:,:,mz:mz,:]) ft2d(a_prop[:,:,mz:mz,:]) ft2d(a_shell[:,:,mz:mz,:]) ft2d(a_RW[:,:,mz:mz,:])
     # mz = size(a_prop2,3)÷2+1; @vt ft2d(a_prop2) ft2d(a_iter) ft2d(a_sincR) ft2d(a_prop) ft2d(a_shell) ft2d(a_RW)
@@ -40,6 +44,19 @@ end
     compare_asfs(sz, pp, sampling)
     pp = PSFParams(pol=pol_y)
     compare_asfs(sz, pp, sampling)
+
+    pp = PSFParams(pol=pol_radial)
+    compare_asfs(sz, pp, sampling; noRW=true)
+    pp = PSFParams(pol=pol_azimuthal)
+    compare_asfs(sz, pp, sampling; noRW=true)
+    pp = PSFParams(pol=pol_radial_annulus)
+    compare_asfs(sz, pp, sampling; noRW=true)
+    # pp = PSFParams(pol=(T, xy) -> pupil_annulus(T, xy) .* pol_radial(T, xy)) # already tested above
+    # compare_asfs(sz, pp, sampling; noRW=true)
+    pp = PSFParams(pol=(T, xy) -> pupil_apodize_hann(T, xy) .* pol_x(T, xy)) 
+    compare_asfs(sz, pp, sampling; noRW=true)
+    pp = PSFParams(pol=(T, xy) -> pupil_apodize_cos(T, xy) .* pol_x(T, xy)) 
+    compare_asfs(sz, pp, sampling; noRW=true)
 end
 
 ct = sz[1].÷2+1
@@ -141,7 +158,11 @@ end
     @test psf(sz, pp; sampling=sampling) == psf((sz...,1),pp; sampling=(sampling...,eps(eltype(sampling))))[:,:,1]
     pp = PSFParams(0.5,1.3,1.52; mode=ModeWidefield, method=PointSpreadFunctions.MethodPropagate, pol=pol_x);
     @test psf(sz, pp; sampling=sampling) == psf((sz...,1),pp; sampling=(sampling...,eps(eltype(sampling))))[:,:,1]
-    pp = PSFParams(0.5,1.3,1.52; mode=ModeWidefield, method=PointSpreadFunctions.MethodSincR, pol=pol_x);
+    # SincR is not supposed to work in 2D
+    # pp = PSFParams(0.5,1.3,1.52; mode=ModeWidefield, method=PointSpreadFunctions.MethodSincR, pol=pol_x);
+    # @test psf(sz, pp; sampling=sampling) == psf((sz...,1),pp; sampling=(sampling...,eps(eltype(sampling))))[:,:,1]
+    pp = PSFParams(0.5,1.3,1.52; mode=ModeWidefield, method=PointSpreadFunctions.MethodCZT, pol=pol_x);
+    @test psf(sz, pp; sampling=sampling) == psf((sz...,1),pp; sampling=(sampling...,eps(eltype(sampling))))[:,:,1]
 
     pp = PSFParams(0.5,1.3,1.52; mode=ModeConfocal, pol=pol_x);
     @test psf(sz, pp; pp_ex=pp, pinhole=1.0, sampling=sampling) == psf((sz...,1),pp; pp_ex=pp, pinhole=1.0, sampling=(sampling...,1))[:,:,1]

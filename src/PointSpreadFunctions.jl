@@ -2,13 +2,15 @@ module PointSpreadFunctions
 using FourierTools: center_pos, FourierJoin
 using FourierTools, NDTools, IndexFunArrays, SpecialFunctions, FFTW
 using ZernikePolynomials
+# using View5D # for debugging only!
+
 export PSFParams, sinc_r, jinc_r_2d, pupil_xyz, apsf, psf, k0, kxy, aplanatic_factor
 export get_Abbe_limit, get_Nyquist_limit, get_pupil_aperture
 export kz_mid_pos
 export modify_STED_exp, modify_STED_hyper, modify_ident, modify_square
 
 export ModeWidefield, ModeConfocal, Mode4Pi, ModeISM, Mode2Photon, ModeSTED, ModeLightsheet
-export MethodRichardsWolf, MethodPropagate, MethodPropagateIterative, MethodShell, MethodSincR
+export MethodRichardsWolf, MethodPropagate, MethodPropagateIterative, MethodShell, MethodSincR, MethodCZT
 
 include("aplanatic.jl")
 include("PSF_types.jl")
@@ -186,13 +188,13 @@ function psf(::Type{ModeLightsheet}, sz::NTuple, pp_em::PSFParams; sampling=noth
             if (ex_modifier == modify_square)
                 max_samp_ex = max_samp_ex./2;
             else
-                warn("unsupported excitation modifyer for the sampling calculation")
+                 @warn("unsupported excitation modifyer for the sampling calculation")
             end
         end
         max_samp_em = get_amp_sampling_z(sz, pp_em, sampling)
         max_samp_total = 1/(1/max_samp_ex[1] + 1/max_samp_em);
         if (sampling[3] > max_samp_total)
-            warn("The z-sampling of the lightsheet PSF is undersampled. The z-sampling should be at least $max_samp_total. The current z-sampling is $(sampling[3]).")
+                @warn("The z-sampling of the lightsheet PSF is undersampled. The z-sampling should be at least $max_samp_total. The current z-sampling is $(sampling[3]).")
         end
     end
 
@@ -290,16 +292,19 @@ function modify_STED_hyper(h, h_doughnut)
 end
 
 """
-    pinhole_AU_to_pix(sz, pp_em, sampling)
+    pinhole_AU_to_pix(sz, pp_em, sampling, pinhole)
 
 returns the pinhole in AU. Also checks if the pinhole is too big.
 """
 function pinhole_AU_to_pix(sz, pp_em, sampling, pinhole)
-     # now we need to modify the sampling such that the pinhole corrsponds to the equivalent of one Airy Unit.
+    # now we need to modify the sampling such that the pinhole corrsponds to the equivalent of one Airy Unit.
     # The Airy Unit is the diameter of the Airy disc: 1.22 * lamda_em / NA 
     # AU = 1.22 * pp_em.λ / pp_em.NA
     if isnothing(pinhole)
         return nothing
+    end
+    if any(isinf.(pinhole))
+        return Inf
     end
     AU_pix = AU_per_pixel(pp_em, sampling) # AU ./ sampling[1:2]
     pinhole_in_AU = pinhole .* AU_pix
@@ -311,15 +316,25 @@ function pinhole_AU_to_pix(sz, pp_em, sampling, pinhole)
 end
 
 """
-    confocal_int(psf_ex, psf_em, pinhole=nothing, pinhole_ft=disc_pinhole_ft, sampling=nothing, use_resampling=true, return_amp=nothing, pinhole_positions=[(0.0,0.0)], ex_modifier=modify_ident)
+    confocal_int(psf_ex, psf_em, pp_em;  pinhole_pix=nothing, pinhole_ft=disc_pinhole_ft, pinhole_positions=[(0.0,0.0)], ex_modifier=modify_ident)
 
 helper function to calculate the confocal detection, once the excitation and emission PSFs and pinhole parameters are defined. Two photon excitation and ISM detection are also included.
+
+Parameters:
++ `psf_ex`: excitation intensity PSF
++ `psf_em`: emission intensity PSF
++ `pp_em`: emission parameters
++ `pinhole_pix`: Pinhole size in pixels. Note that the value "Inf" will lead to the emission PSF being ignored and the exitation PSF being returned.
++ `pinhole_ft`: Pinhole function in Fourier space
 """
 function confocal_int(psf_ex, psf_em, pp_em;  pinhole_pix=nothing, pinhole_ft=disc_pinhole_ft, pinhole_positions=[(0.0,0.0)], ex_modifier=modify_ident)
    
     # This can be done a lot more efficiently by staying in Fourier space. Ideally even by only calculating half the range of the jinc function:
     # pinhole = real.(ift2d(jinc_r_2d(sz, pinhole .* AU_pix, pp_em.dtype)))
     # pinhole_ft = rfft2d(ifftshift(pinhole))
+    if !isnothing(pinhole_pix) && any(isinf.(pinhole_pix))
+        return psf_ex
+    end
 
     all_PSFs = Vector{typeof(psf_em)}();
     sz = size(psf_em)
@@ -525,6 +540,8 @@ end
 
 Calculates a 4Pi point spread function. Note that the default is using a two-photon excitation.
 Returns the PSF or a vector of PSFs.
+
+To calculate a emission only PSF (Widefield excitation, perfect "closed pinhole" detection), use pp_em as pp_ex and set the pinhole size to Inf!
     
 # Parameters
 + `sz`:         size tuple of the final PSF
@@ -603,6 +620,7 @@ function psf(::Type{Mode4Pi}, sz::NTuple, pp_ex::PSFParams; sampling=nothing, pp
 
     pinhole_pix = pinhole_AU_to_pix(sz, pp_em, sampling, pinhole)
     return confocal_int(psf_ex, psf_em, pp_em; pinhole_pix=pinhole_pix, pinhole_ft=pinhole_ft, pinhole_positions=pinhole_positions, ex_modifier=ex_modifier)
+    
 end
 
 

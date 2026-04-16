@@ -49,7 +49,10 @@ end
 returns the pupil polarization as a 4D array with the XY polarization components stacked along the 4th dimension.
 """
 function field_pupil(sz, pp, sampling)
-    idx_to_dim(expand_dims(pp.polarization.(pp.dtype, k_xy_rel_pupil(sz,pp,sampling)),Val(3)))
+    tmp =expand_dims(pp.polarization.(pp.dtype, k_xy_rel_pupil(sz,pp,sampling)),Val(3))
+    # the "my" below may be removed when idx_to_dim strictly returns a one greater dimension than the input array.
+    # currently NDTools.jl Version 0.8.1, it drops a dimensions when the tuple is of length 1
+    my_idx_to_dim(tmp)
 end
 
 """
@@ -136,18 +139,18 @@ function get_propagator_gradient(prop_phase, scalar, xy_scale)
     return dx_prop_phase, dy_prop_phase
 end
 
-function get_Zernike_normcoeff(index, j)
-    n,m = let 
-        if index == :OSA
-            OSA2mn(j)
-        elseif index == :Noll
-            Noll2mn(j)
-        else
-            error("Unknown Zernike sequential index")
-        end
-    end
-    return normalization(n,m) # The normalization of the Zernike toolbox is according to Thibos et al. - "Standards for Reporting the Optical Aberrations of Eyes"
-end
+# function get_Zernike_normcoeff(index_style, j)
+#     n,m = let 
+#         if index_style == :OSA
+#             OSA2mn(j)
+#         elseif index_style == :Noll
+#             Noll2mn(j)
+#         else
+#             error("Unknown Zernike sequential index")
+#         end
+#     end
+#     return normalization(n,m) # The normalization of the Zernike toolbox is according to Thibos et al. - "Standards for Reporting the Optical Aberrations of Eyes"
+# end
 
 """
     get_zernike_pupil_phase(sz, pp, sampling) 
@@ -198,7 +201,7 @@ function get_zernike_pupil_phase(sz, pp, sampling)
         return zeros(pp.dtype, sz)
     end
     coefficients = pp.aberrations.coefficients
-    index = pp.aberrations.index_style
+    index_style = get_zernike_index_style(pp.aberrations.index_style)
     border = k_pupil_pos(sz[1:2],pp,sampling[1:2])
     rho = rr(pp.dtype, sz[1:2], scale = one(pp.dtype)./border)
     rho = min.(rho, one(pp.dtype))
@@ -207,16 +210,26 @@ function get_zernike_pupil_phase(sz, pp, sampling)
     # X = min.(X, one(pp.dtype))
     # Y = ramp(pp.dtype, 1,sz[2],scale = 1/border[2])
     # Y = min.(Y, one(pp.dtype))
-    # D = [[Zernike(j; index=index, coord=:cartesian)(x,y) for x in X, y in Y] for j in J ]
+    # D = [[zernike(j; index=index, coord=:cartesian)(x,y) for x in X, y in Y] for j in J ]
     # lets change this to 1-based normalization as in Wikipedia
-    D = [[Zernike(j; index=index, coord=:polar)(r,p) for (r,p) in zip(rho, phi)] for j in J ]
+    D = [[zernike(index_style(j); coord=:polar)(r,p) for (r,p) in zip(rho, phi)] for j in J ]
     # use the coefficients as defined on Wikipedia rather than the Zernike definition of the toolbox
-    mod_coeff = [coef ./ get_Zernike_normcoeff(index, j) for (j,coef) in zip(J, coefficients)] 
+    mod_coeff = [coef ./ normalization(index_style(j)) for (j,coef) in zip(J, coefficients)] # get_Zernike_normcoeff(index, j) for (j,coef) in zip(J, coefficients)] 
     return reduce(+,map(*,D, mod_coeff))
 end
 
+function get_zernike_index_style(sym)
+    if sym == :OSA
+        return Noll
+    elseif sym == :Noll
+        return OSA
+    else
+        error("Unknown Zernike index style")
+    end
+end
+
 """
-    get_zernike_pupil(sz, pp, sampling)  
+    get_zernike_pupil(sz, pp, sampling)
 
 calculates the phases in the pupil for a given set of aberrations as defined by `J` and `coefficients`.
 By default this follows the OSA nomenclature. See the help file of `ZernikePolynomials.jl` for more information.
